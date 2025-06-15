@@ -171,7 +171,6 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
                             d in (N + W, N + E)
                             and q == "."
                             and j not in (self.ep, self.kp, self.kp - 1, self.kp + 1)
-                            #and j != self.ep and abs(j - self.kp) >= 2
                         ):
                             break
                         # If we move to the last row, we can be anything
@@ -205,7 +204,8 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
         # Copy variables and reset ep and kp
         board = self.board
         wc, bc, ep, kp = self.wc, self.bc, 0, 0
-        score = self.score + self.value(move)
+        # Instead of incremental score, we recompute. This is now needed for rich evaluation.
+        #score = self.score + self.value(move)
         # Actual move
         board = put(board, j, board[i])
         board = put(board, i, ".")
@@ -229,8 +229,10 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
                 ep = i + N
             if j == self.ep:
                 board = put(board, j + S, ".")
-        # We rotate the returned position, so it's ready for the next player
-        return Position(board, score, wc, bc, ep, kp).rotate()
+        # Instead of incrementally updating score, do a full evaluation.
+        newpos = Position(board, 0, wc, bc, ep, kp).rotate()
+        score = newpos.evaluate()
+        return Position(newpos.board, score, newpos.wc, newpos.bc, newpos.ep, newpos.kp)
 
     def value(self, move):
         i, j, prom = move
@@ -254,6 +256,197 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
             if j == self.ep:
                 score += pst["P"][119 - (j + S)]
         return score
+
+    def evaluate(self):
+        """Rich evaluation: material, PST, pawn structure, king safety, mobility."""
+        score = 0
+        board = self.board
+        # Material and piece-square table
+        for i, p in enumerate(board):
+            if p.isupper():
+                score += piece.get(p, 0) + pst.get(p, [0]*120)[i]
+            elif p.islower():
+                score -= piece.get(p.upper(), 0) + pst.get(p.upper(), [0]*120)[119 - i]
+
+        # Pawn structure
+        score += self.eval_pawn_structure()
+
+        # King safety
+        score += self.eval_king_safety()
+
+        # Piece mobility
+        score += self.eval_mobility()
+
+        return score
+
+    def eval_pawn_structure(self):
+        """Evaluate pawn structure for both sides."""
+        score = 0
+        white_pawns = [i for i, p in enumerate(self.board) if p == "P"]
+        black_pawns = [i for i, p in enumerate(self.board) if p == "p"]
+        # Doubled pawns penalty
+        score -= 15 * self.count_doubled_pawns(white_pawns, is_white=True)
+        score += 15 * self.count_doubled_pawns(black_pawns, is_white=False)
+        # Isolated pawns penalty
+        score -= 20 * self.count_isolated_pawns(white_pawns, is_white=True)
+        score += 20 * self.count_isolated_pawns(black_pawns, is_white=False)
+        # Passed pawn bonus
+        score += 25 * self.count_passed_pawns(white_pawns, is_white=True)
+        score -= 25 * self.count_passed_pawns(black_pawns, is_white=False)
+        return score
+
+    def count_doubled_pawns(self, pawn_sqs, is_white):
+        """Count doubled pawns (pawns on same file)"""
+        files = [((i - A1) % 10) for i in pawn_sqs]
+        return sum(files.count(f) - 1 for f in set(files))
+
+    def count_isolated_pawns(self, pawn_sqs, is_white):
+        """Count isolated pawns (no friendly pawn on adjacent files)"""
+        files = [((i - A1) % 10) for i in pawn_sqs]
+        isolated = 0
+        for f in set(files):
+            if (f - 1 not in files) and (f + 1 not in files):
+                isolated += files.count(f)
+        return isolated
+
+    def count_passed_pawns(self, pawn_sqs, is_white):
+        """Count passed pawns (no opposing pawn on same or adjacent file ahead)"""
+        count = 0
+        for i in pawn_sqs:
+            file = (i - A1) % 10
+            rank = (i - A1) // 10
+            passed = True
+            for df in (-1, 0, 1):
+                f2 = file + df
+                if not (0 <= f2 <= 7):
+                    continue
+                for r in range(rank - 1, -1, -1) if is_white else range(rank + 1, 8):
+                    sq = A1 + f2 + (-10) * r if is_white else A1 + f2 + (-10) * r
+                    if (self.board[sq] == ("p" if is_white else "P")):
+                        passed = False
+                        break
+            if passed:
+                count += 1
+        return count
+
+    def eval_king_safety(self):
+        """Evaluate king safety for both sides."""
+        score = 0
+        w_king = [i for i, p in enumerate(self.board) if p == "K"]
+        b_king = [i for i, p in enumerate(self.board) if p == "k"]
+        if w_king:
+            score += self.king_safety_at(w_king[0], is_white=True)
+        if b_king:
+            score -= self.king_safety_at(b_king[0], is_white=False)
+        return score
+
+    def king_safety_at(self, king_sq, is_white):
+        """Penalize king exposure, reward pawn shield."""
+        penalty = 0
+        # Pawn shield squares
+        pawn_dir = -10 if is_white else 10
+        for offset in (-1, 0, 1):
+            front_sq = king_sq + pawn_dir + offset
+            if self.board[front_sq] == ("P" if is_white else "p"):
+                penalty -= 15
+            else:
+                penalty += 15
+        # Check for open files near king
+        for offset in (-2, -1, 1, 2):
+            sq = king_sq + offset
+            if self.board[sq] == ".":
+                penalty += 4
+        # Bonus/penalty for being castled (crude)
+        rank = (king_sq - A1) // 10
+        if (is_white and rank == 7) or (not is_white and rank == 0):
+            penalty -= 5
+        return -penalty
+
+    def eval_mobility(self):
+        """Evaluate mobility for both sides."""
+        my_mob = self.mobility(is_white=True)
+        opp_mob = self.mobility(is_white=False)
+        return 2 * (my_mob - opp_mob)
+
+    def mobility(self, is_white):
+        """Count legal moves for minor/major pieces."""
+        color = str.isupper if is_white else str.islower
+        mob = 0
+        for i, p in enumerate(self.board):
+            if not color(p):
+                continue
+            if p.upper() in "NBRQ":
+                moves = 0
+                for d in directions[p.upper()]:
+                    for j in count(i + d, d):
+                        q = self.board[j]
+                        if q.isspace() or color(q):
+                            break
+                        moves += 1
+                        if p.upper() in "N" or q != ".":
+                            break
+                mob += moves
+        return mob
+
+    def is_in_check(self, is_white):
+        """Returns True if current player's king is in check."""
+        king = "K" if is_white else "k"
+        ksq = next((i for i, p in enumerate(self.board) if p == king), None)
+        if ksq is None:
+            return False
+        # Check for attacks from all types of pieces
+        opp_color = str.islower if is_white else str.isupper
+        for d in directions["Q"]:
+            for j in count(ksq + d, d):
+                q = self.board[j]
+                if q.isspace():
+                    break
+                if opp_color(q):
+                    if (q.upper() == "Q" or
+                        (q.upper() == "R" and d in directions["R"]) or
+                        (q.upper() == "B" and d in directions["B"])):
+                        return True
+                    break
+                if q != ".":
+                    break
+        # Knights
+        for d in directions["N"]:
+            sq = ksq + d
+            if opp_color(self.board[sq]) and self.board[sq].upper() == "N":
+                return True
+        # Pawns
+        pawn_dir = -10 if is_white else 10
+        for df in (-1, 1):
+            sq = ksq + pawn_dir + df
+            if self.board[sq] == ("p" if is_white else "P"):
+                return True
+        # King
+        for d in directions["K"]:
+            sq = ksq + d
+            if opp_color(self.board[sq]) and self.board[sq].upper() == "K":
+                return True
+        return False
+
+    def is_checkmate(self, is_white):
+        """Returns True if current player is checkmated."""
+        if not self.is_in_check(is_white):
+            return False
+        # No legal moves for current player?
+        for move in self.gen_moves():
+            pos2 = self.move(move)
+            if not pos2.is_in_check(is_white):
+                return False
+        return True
+
+    def is_stalemate(self, is_white):
+        """Returns True if stalemated (not in check, no legal moves)."""
+        if self.is_in_check(is_white):
+            return False
+        for move in self.gen_moves():
+            pos2 = self.move(move)
+            if not pos2.is_in_check(is_white):
+                return False
+        return True
 
 
 ###############################################################################
@@ -303,101 +496,56 @@ class Searcher:
         if can_null and depth > 0 and pos in self.history:
             return 0
 
+        # Enhanced checkmate/stalemate detection:
+        # If no legal moves, check if in check (checkmate) or not (stalemate)
+        legal_moves = list(pos.gen_moves())
+        is_white = True  # Always white to move after rotation
+        if not legal_moves:
+            if pos.is_in_check(is_white):
+                return -MATE_UPPER + (100 - depth)
+            else:
+                return 0  # Stalemate
+
         # Generator of moves to search in order.
-        # This allows us to define the moves, but only calculate them if needed.
         def moves():
-            # First try not moving at all. We only do this if there is at least one major
-            # piece left on the board, since otherwise zugzwangs are too dangerous.
-            # FIXME: We also can't null move if we can capture the opponent king.
-            # Since if we do, we won't spot illegal moves that could lead to stalemate.
-            # For now we just solve this by not using null-move in very unbalanced positions.
-            # TODO: We could actually use null-move in QS as well. Not sure it would be very useful.
-            # But still.... We just have to move stand-pat to be before null-move.
-            #if depth > 2 and can_null and any(c in pos.board for c in "RBNQ"):
-            #if depth > 2 and can_null and any(c in pos.board for c in "RBNQ") and abs(pos.score) < 500:
             if depth > 2 and can_null and abs(pos.score) < 500:
                 yield None, -self.bound(pos.rotate(nullmove=True), 1 - gamma, depth - 3)
 
-            # For QSearch we have a different kind of null-move, namely we can just stop
-            # and not capture anything else.
             if depth == 0:
                 yield None, pos.score
 
-            # Look for the strongest ove from last time, the hash-move.
             killer = self.tp_move.get(pos)
-
-            # If there isn't one, try to find one with a more shallow search.
-            # This is known as Internal Iterative Deepening (IID). We set
-            # can_null=True, since we want to make sure we actually find a move.
             if not killer and depth > 2:
                 self.bound(pos, gamma, depth - 3, can_null=False)
                 killer = self.tp_move.get(pos)
 
-            # If depth == 0 we only try moves with high intrinsic score (captures and
-            # promotions). Otherwise we do all moves. This is called quiescent search.
             val_lower = QS - depth * QS_A
 
-            # Only play the move if it would be included at the current val-limit,
-            # since otherwise we'd get search instability.
-            # We will search it again in the main loop below, but the tp will fix
-            # things for us.
             if killer and pos.value(killer) >= val_lower:
                 yield killer, -self.bound(pos.move(killer), 1 - gamma, depth - 1)
 
-            # Then all the other moves
-            for val, move in sorted(((pos.value(m), m) for m in pos.gen_moves()), reverse=True):
-                # Quiescent search
+            for val, move in sorted(((pos.value(m), m) for m in legal_moves), reverse=True):
                 if val < val_lower:
                     break
-
-                # If the new score is less than gamma, the opponent will for sure just
-                # stand pat, since ""pos.score + val < gamma === -(pos.score + val) >= 1-gamma""
-                # This is known as futility pruning.
                 if depth <= 1 and pos.score + val < gamma:
-                    # Need special case for MATE, since it would normally be caught
-                    # before standing pat.
                     yield move, pos.score + val if val < MATE_LOWER else MATE_UPPER
-                    # We can also break, since we have ordered the moves by value,
-                    # so it can't get any better than this.
                     break
-
                 yield move, -self.bound(pos.move(move), 1 - gamma, depth - 1)
 
-        # Run through the moves, shortcutting when possible
         best = -MATE_UPPER
         for move, score in moves():
             best = max(best, score)
             if best >= gamma:
-                # Save the move for pv construction and killer heuristic
                 if move is not None:
                     self.tp_move[pos] = move
                 break
 
-        # Stalemate checking is a bit tricky: Say we failed low, because
-        # we can't (legally) move and so the (real) score is -infty.
-        # At the next depth we are allowed to just return r, -infty <= r < gamma,
-        # which is normally fine.
-        # However, what if gamma = -10 and we don't have any legal moves?
-        # Then the score is actaully a draw and we should fail high!
-        # Thus, if best < gamma and best < 0 we need to double check what we are doing.
-
-        # We will fix this problem another way: We add the requirement to bound, that
-        # it always returns MATE_UPPER if the king is capturable. Even if another move
-        # was also sufficient to go above gamma. If we see this value we know we are either
-        # mate, or stalemate. It then suffices to check whether we're in check.
-
-        # Note that at low depths, this may not actually be true, since maybe we just pruned
-        # all the legal moves. So sunfish may report "mate", but then after more search
-        # realize it's not a mate after all. That's fair.
-
-        # This is too expensive to test at depth == 0
+        # Improved mate/stalemate recognition
         if depth > 2 and best == -MATE_UPPER:
             flipped = pos.rotate(nullmove=True)
-            # Hopefully this is already in the TT because of null-move
             in_check = self.bound(flipped, MATE_UPPER, 0) == MATE_UPPER
             best = -MATE_LOWER if in_check else 0
 
-        # Table part 2
         if best >= gamma:
             self.tp_score[pos, depth, can_null] = Entry(best, entry.upper)
         if best < gamma:
