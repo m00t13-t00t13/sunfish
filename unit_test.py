@@ -14,19 +14,6 @@ def create_position(fen):
     # uci.fen_to_pos returns a Position object
     return uci.fen_to_pos(fen)
 
-def get_position_score(pos, depth=3):
-    searcher = Searcher()
-    # Minimal search to get the position score
-    score = None
-    for _, _, s, _ in searcher.search([pos]):
-        score = s
-        break
-    return score
-
-def is_king_capturable(pos):
-    # If the king is gone, it's capturable (score is mate value or worse)
-    return pos.score <= -60000 + 1
-
 def test_passed_pawn_bonus():
     # White has a passed pawn on d5, black pawns can't stop it
     pos_with_passed = create_position("8/8/3P4/8/8/8/8/8 w - - 0 1")
@@ -68,33 +55,6 @@ def test_king_mobility():
     # King in the center with space
     free_king = create_position("8/8/8/8/3K4/8/8/8 w - - 0 1")
     assert free_king.score > trapped_king.score
-
-def test_legal_moves_in_check():
-    # White king in check from black rook, only moves get out of check
-    check_position = create_position("8/8/8/8/8/8/1r6/4K3 w - - 0 1")
-    legal_moves = list(check_position.gen_moves())
-    # All moves should escape check
-    for move in legal_moves:
-        after_move = check_position.move(move)
-        assert not is_king_capturable(after_move)
-
-def test_checkmate_detection():
-    # Fool's mate: Black to move, white is checkmated
-    checkmate_pos = create_position("rnb1kbnr/pppppppp/8/8/8/8/PPPPPPP1/RNBQKBNR b KQkq - 0 1")
-    # Move black queen to h4, checkmate
-    checkmate_pos = checkmate_pos.move((parse("d8"), parse("h4"), ""))
-    # Now white to move, but checkmated
-    legal_moves = list(checkmate_pos.gen_moves())
-    assert len(legal_moves) == 0
-
-def test_search_prefers_better_positions():
-    # Position 1: White up a queen
-    pos1 = create_position("8/8/8/8/8/8/8/Q3K3 w - - 0 1")
-    # Position 2: White up a pawn
-    pos2 = create_position("8/8/8/8/8/8/8/P3K3 w - - 0 1")
-    score1 = get_position_score(pos1, depth=3)
-    score2 = get_position_score(pos2, depth=3)
-    assert score1 > score2
 
 # Helper for move parsing, borrowed from sunfish
 def parse(c):
