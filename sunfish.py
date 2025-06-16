@@ -297,15 +297,17 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
 
     def count_doubled_pawns(self, pawn_sqs, is_white):
         """Count doubled pawns (pawns on same file)"""
-        files = [((i - A1) % 10) for i in pawn_sqs]
-        return sum(files.count(f) - 1 for f in set(files))
+        files = [((i - A1) % 8) for i in pawn_sqs if A1 <= i <= H1 + 70]
+        return sum(max(files.count(f) - 1, 0) for f in set(files))
 
     def count_isolated_pawns(self, pawn_sqs, is_white):
         """Count isolated pawns (no friendly pawn on adjacent files)"""
-        files = [((i - A1) % 10) for i in pawn_sqs]
+        files = [((i - A1) % 8) for i in pawn_sqs if A1 <= i <= H1 + 70]
         isolated = 0
         for f in set(files):
-            if (f - 1 not in files) and (f + 1 not in files):
+            has_left = (f - 1) in files
+            has_right = (f + 1) in files
+            if not has_left and not has_right:
                 isolated += files.count(f)
         return isolated
 
@@ -313,17 +315,30 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
         """Count passed pawns (no opposing pawn on same or adjacent file ahead)"""
         count = 0
         for i in pawn_sqs:
-            file = (i - A1) % 10
+            file = (i - A1) % 8
             rank = (i - A1) // 10
             passed = True
             for df in (-1, 0, 1):
                 f2 = file + df
                 if not (0 <= f2 <= 7):
                     continue
-                for r in range(rank - 1, -1, -1) if is_white else range(rank + 1, 8):
-                    sq = A1 + f2 + (-10) * r if is_white else A1 + f2 + (-10) * r
-                    if (self.board[sq] == ("p" if is_white else "P")):
-                        passed = False
+                if is_white:
+                    for r in range(rank - 1, -1, -1):
+                        sq = A1 + f2 + (-10) * r
+                        if 0 <= sq < len(self.board):
+                            if self.board[sq] == "p":
+                                passed = False
+                                break
+                    if not passed:
+                        break
+                else:
+                    for r in range(rank + 1, 8):
+                        sq = A1 + f2 + (-10) * r
+                        if 0 <= sq < len(self.board):
+                            if self.board[sq] == "P":
+                                passed = False
+                                break
+                    if not passed:
                         break
             if passed:
                 count += 1
@@ -347,14 +362,15 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
         pawn_dir = -10 if is_white else 10
         for offset in (-1, 0, 1):
             front_sq = king_sq + pawn_dir + offset
-            if self.board[front_sq] == ("P" if is_white else "p"):
-                penalty -= 15
-            else:
-                penalty += 15
+            if 0 <= front_sq < len(self.board):
+                if self.board[front_sq] == ("P" if is_white else "p"):
+                    penalty -= 15
+                else:
+                    penalty += 15
         # Check for open files near king
         for offset in (-2, -1, 1, 2):
             sq = king_sq + offset
-            if self.board[sq] == ".":
+            if 0 <= sq < len(self.board) and self.board[sq] == ".":
                 penalty += 4
         # Bonus/penalty for being castled (crude)
         rank = (king_sq - A1) // 10
