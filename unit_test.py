@@ -9,10 +9,21 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "tool
 from sunfish import Position, Searcher
 import tools.uci as uci
 
-# Helper to create a Position from FEN using tools/uci.py
+# Helper to create a Position from FEN using tools/uci.py's from_fen
 def create_position(fen):
-    # uci.fen_to_pos returns a Position object
-    return uci.fen_to_pos(fen)
+    """Create a Position object from a FEN string using uci.from_fen"""
+    fields = fen.split()
+    # FEN: board, color, castling, enpas, hclock, fclock
+    board = fields[0]
+    color = fields[1]
+    castling = fields[2]
+    enpas = fields[3]
+    hclock = fields[4]
+    fclock = fields[5]
+    pos = uci.from_fen(board, color, castling, enpas, hclock, fclock)
+    # Ensure score is up-to-date with current evaluation function
+    pos = pos._replace(score=pos.evaluate())
+    return pos
 
 def test_passed_pawn_bonus():
     # White has a passed pawn on d5, black pawns can't stop it
