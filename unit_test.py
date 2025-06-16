@@ -1,76 +1,66 @@
+import unittest
 import sys
 import os
-import pytest
 
-# Add current directory and tools to sys.path for import
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "tools")))
+from sunfish import Position
 
-from sunfish import Position, Searcher
-import tools.uci as uci
+def fen_to_board(fen):
+    """Convert FEN piece placement to a sunfish board string."""
+    rows = fen.split()[0].split('/')
+    board = []
+    for r in rows:
+        row = ''
+        for c in r:
+            if c.isdigit():
+                row += '.' * int(c)
+            else:
+                row += c
+        board.append(row)
+    # Add padding for Sunfish 120-square board
+    boardstr = "         \n" * 2
+    for row in board:
+        boardstr += " " + row + "\n"
+    boardstr += "         \n" * 2
+    return boardstr
 
-# Helper to create a Position from FEN using tools/uci.py's from_fen
 def create_position(fen):
-    """Create a Position object from a FEN string using uci.from_fen"""
-    fields = fen.split()
-    # FEN: board, color, castling, enpas, hclock, fclock
-    board = fields[0]
-    color = fields[1]
-    castling = fields[2]
-    enpas = fields[3]
-    hclock = fields[4]
-    fclock = fields[5]
-    pos = uci.from_fen(board, color, castling, enpas, hclock, fclock)
-    # Ensure score is up-to-date with current evaluation function
-    pos = pos._replace(score=pos.evaluate())
-    return pos
+    board = fen_to_board(fen)
+    # Default: both sides can castle, ep=kp=0, score will be recomputed
+    pos = Position(board, 0, (True, True), (True, True), 0, 0)
+    # Only static evaluation, no search
+    return pos._replace(score=pos.evaluate())
 
-def test_passed_pawn_bonus():
-    # White has a passed pawn on d5, black pawns can't stop it
-    pos_with_passed = create_position("8/8/3P4/8/8/8/8/8 w - - 0 1")
-    # White pawn on d4 but black pawn on d5 blocks it
-    pos_without_passed = create_position("8/3p4/3P4/8/8/8/8/8 w - - 0 1")
-    assert pos_with_passed.score > pos_without_passed.score
+class TestSunfishEvaluation(unittest.TestCase):
+    def test_passed_pawn_bonus(self):
+        pos_with_passed = create_position("8/8/3P4/8/8/8/8/8 w - - 0 1")
+        pos_without_passed = create_position("8/3p4/3P4/8/8/8/8/8 w - - 0 1")
+        self.assertGreater(pos_with_passed.evaluate(), pos_without_passed.evaluate())
 
-def test_doubled_pawn_punish():
-    # Doubled white pawns on b2/b3
-    pos_doubled = create_position("8/8/8/8/8/1P6/1P6/8 w - - 0 1")
-    # Spread white pawns on b2 and c2
-    pos_not_doubled = create_position("8/8/8/8/8/8/1P1P4/8 w - - 0 1")
-    assert pos_not_doubled.score > pos_doubled.score
+    def test_doubled_pawn_punish(self):
+        pos_doubled = create_position("8/8/8/8/8/1P6/1P6/8 w - - 0 1")
+        pos_not_doubled = create_position("8/8/8/8/8/8/1P1P4/8 w - - 0 1")
+        self.assertGreater(pos_not_doubled.evaluate(), pos_doubled.evaluate())
 
-def test_isolated_pawn_penalty():
-    # Isolated white pawn on b2
-    pos_isolated = create_position("8/8/8/8/8/8/1P6/8 w - - 0 1")
-    # Connected white pawns on b2 and c2
-    pos_connected = create_position("8/8/8/8/8/8/1P1P4/8 w - - 0 1")
-    assert pos_connected.score > pos_isolated.score
+    def test_isolated_pawn_penalty(self):
+        pos_isolated = create_position("8/8/8/8/8/8/1P6/8 w - - 0 1")
+        pos_connected = create_position("8/8/8/8/8/8/1P1P4/8 w - - 0 1")
+        self.assertGreater(pos_connected.evaluate(), pos_isolated.evaluate())
 
-def test_king_safety_evaluation():
-    # Castled king with full pawn shield
-    safe_king_pos = create_position("8/8/8/8/8/8/PPP5/5K2 w - - 0 1")
-    # King on open file, no pawn shield
-    exposed_king_pos = create_position("8/8/8/8/8/8/8/4K3 w - - 0 1")
-    assert safe_king_pos.score > exposed_king_pos.score
+    def test_king_safety_evaluation(self):
+        safe_king_pos = create_position("8/8/8/8/8/8/PPP5/5K2 w - - 0 1")
+        exposed_king_pos = create_position("8/8/8/8/8/8/8/4K3 w - - 0 1")
+        self.assertGreater(safe_king_pos.evaluate(), exposed_king_pos.evaluate())
 
-def test_attacking_pieces_near_king():
-    # King surrounded by its pieces (safe)
-    safe_king_pos = create_position("8/8/8/8/8/8/PPP5/5K2 w - - 0 1")
-    # King attacked by enemy queen
-    attacked_king_pos = create_position("8/8/8/8/8/8/8/4K2q w - - 0 1")
-    assert safe_king_pos.score > attacked_king_pos.score
+    def test_attacking_pieces_near_king(self):
+        safe_king_pos = create_position("8/8/8/8/8/8/PPP5/5K2 w - - 0 1")
+        attacked_king_pos = create_position("8/8/8/8/8/8/8/4K2q w - - 0 1")
+        self.assertGreater(safe_king_pos.evaluate(), attacked_king_pos.evaluate())
 
-def test_king_mobility():
-    # King trapped in the corner
-    trapped_king = create_position("8/8/8/8/8/8/8/K7 w - - 0 1")
-    # King in the center with space
-    free_king = create_position("8/8/8/8/3K4/8/8/8 w - - 0 1")
-    assert free_king.score > trapped_king.score
-
-# Helper for move parsing, borrowed from sunfish
-def parse(c):
-    fil, rank = ord(c[0]) - ord("a"), int(c[1]) - 1
-    return 91 + fil - 10 * rank
+    def test_king_mobility(self):
+        trapped_king = create_position("8/8/8/8/8/8/8/K7 w - - 0 1")
+        free_king = create_position("8/8/8/8/3K4/8/8/8 w - - 0 1")
+        self.assertGreater(free_king.evaluate(), trapped_king.evaluate())
 
 if __name__ == "__main__":
-    pytest.main([__file__])
+    unittest.main()
