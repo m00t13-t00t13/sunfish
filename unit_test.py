@@ -107,5 +107,79 @@ class TestSunfishEvalUCI(unittest.TestCase):
         eval_free = get_eval_from_engine(fen_free)
         self.assertGreater(eval_free, eval_trapped)
 
+    def test_discovered_check(self):
+        # Position: White to move, bishop can move to reveal rook check on e-file.
+        # 8 . . . . k . . .
+        # 7 . . . . p . . .
+        # 6 . . . . . . . .
+        # 5 . . . . . . . .
+        # 4 . . . . . . . .
+        # 3 . . B . . . . .
+        # 2 . . . . . . . .
+        # 1 . . . . R . . .
+        # FEN: 4k3/4p3/8/8/8/2B5/8/4R3 w - - 0 1
+        fen = "4k3/4p3/8/8/8/2B5/8/4R3 w - - 0 1"
+        # The best move should be moving the bishop on c3 (from c3 to any square not blocking e1-e8), giving discovered check.
+        # We'll check that the engine's best move is a legal bishop move that results in check.
+
+        # Start engine as before
+        proc = subprocess.Popen(
+            [sys.executable, ENGINE_PATH],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            bufsize=1,
+        )
+
+        def send(cmd):
+            proc.stdin.write(cmd + "\n")
+            proc.stdin.flush()
+
+        def read_until(keyword):
+            lines = []
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                lines.append(line)
+                if keyword in line:
+                    break
+            return lines
+
+        # UCI handshake
+        send("uci")
+        read_until("uciok")
+        send("isready")
+        read_until("readyok")
+        send(f"position fen {fen}")
+        send("go depth 1")
+
+        bestmove = None
+        pvline = None
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                break
+            if line.startswith("info") and "pv" in line:
+                pvline = line
+            if line.startswith("bestmove"):
+                m = re.search(r"bestmove (\w+)", line)
+                if m:
+                    bestmove = m.group(1)
+                break
+
+        send("quit")
+        proc.stdin.close()
+        proc.stdout.close()
+        proc.stderr.close()
+        proc.wait(timeout=5)
+
+        # Acceptable discovered check bishop moves: c3-b2, c3-d2, c3-d4, c3-b4, c3-e5, c3-a5, c3-f6, c3-g7, c3-h8
+        discovered_moves = {"c3b2", "c3d2", "c3d4", "c3b4", "c3e5", "c3a5", "c3f6", "c3g7", "c3h8"}
+
+        # The bestmove should be one of these
+        self.assertIn(bestmove[:4], discovered_moves, f"Engine bestmove {bestmove} is not a discovered check bishop move! PV: {pvline}")
+
 if __name__ == "__main__":
     unittest.main()
