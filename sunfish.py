@@ -151,8 +151,20 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
     """
 
     def gen_moves(self):
-        # Generate all pseudo-legal moves and filter out moves that leave the king in check.
-        pseudo_moves = []
+        # Generate all pseudo-legal moves and filter out those that leave the king in check.
+        for move in self._pseudo_legal_moves():
+            # After move(), pos2 is rotated so it's always white to move.
+            # So to check if OUR king is in check, we check pos2.is_in_check(True).
+            pos2 = self.move(move)
+            if not pos2.is_in_check(True):
+                # For castling, ensure king doesn't cross check (explicit check for all squares king passes through)
+                if self._is_castling_move(move):
+                    if not self._is_castling_legal(move):
+                        continue
+                yield move
+
+    def _pseudo_legal_moves(self):
+        # Returns all moves that are valid except for king-in-check after the move
         for i, p in enumerate(self.board):
             if not p.isupper():
                 continue
@@ -173,42 +185,28 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
                             break
                         if A8 <= j <= H8:
                             for prom in "NBRQ":
-                                pseudo_moves.append(Move(i, j, prom))
+                                yield Move(i, j, prom)
                             break
-                    pseudo_moves.append(Move(i, j, ""))
+                    yield Move(i, j, "")
                     if p in "PNK" or q.islower():
                         break
                     # Castling, by sliding the rook next to the king
                     if i == A1 and self.board[j + E] == "K" and self.wc[0]:
-                        pseudo_moves.append(Move(j + E, j + W, ""))
+                        yield Move(j + E, j + W, "")
                     if i == H1 and self.board[j + W] == "K" and self.wc[1]:
-                        pseudo_moves.append(Move(j + W, j + E, ""))
-        # Filter to only legal moves: after our move, our king must not be attacked
-        for move in pseudo_moves:
-            pos2 = self.move(move)
-            # After move(), pos2 is rotated so white is always to move. Thus, to check
-            # if our king is in check after move, check pos2.is_in_check(True)
-            if not pos2.is_in_check(True):
-                # For castling moves, ensure king doesn't move through/into check
-                if self.is_castling_move(move):
-                    if not self.is_castling_legal(move):
-                        continue
-                yield move
+                        yield Move(j + W, j + E, "")
 
-    def is_castling_move(self, move):
+    def _is_castling_move(self, move):
         i, j, prom = move
-        p = self.board[i]
-        return p == "K" and abs(i - j) == 2
+        return self.board[i] == "K" and abs(i - j) == 2
 
-    def is_castling_legal(self, move):
-        # Ensure that castling does not move the king through or into check
+    def _is_castling_legal(self, move):
         i, j, prom = move
         if abs(i - j) != 2:
             return True
         king_dir = 1 if j > i else -1
         king_path = [i, i + king_dir, i + king_dir * 2]
         for sq in king_path:
-            # Put king on each square and check for check
             board = self.board[:sq] + "K" + self.board[sq + 1 :]
             board = board[:i] + "." + board[i + 1 :]
             pos_tmp = Position(board, 0, self.wc, self.bc, self.ep, self.kp)
@@ -307,8 +305,10 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
         return score
 
     def eval_pawn_structure(self):
-        """Evaluate pawn structure for both sides. Exaggerated penalties/bonuses for testing."""
+        """Evaluate pawn structure for both sides. Exaggerated penalties/bonuses for testing.
+        Penalties/bonuses are always positive for our (white's) side after rotation."""
         score = 0
+        # After rotation, always white to move, so always evaluate for "white is us"
         white_pawns = [i for i, p in enumerate(self.board) if p == "P"]
         black_pawns = [i for i, p in enumerate(self.board) if p == "p"]
         # Exaggerated doubled pawns penalty
@@ -321,6 +321,58 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
         score += 900 * self.count_passed_pawns(white_pawns, is_white=True)
         score -= 900 * self.count_passed_pawns(black_pawns, is_white=False)
         return score
+
+    def count_doubled_pawns(self, pawn_sqs, is_white):
+        """Count doubled pawns for a given color."""
+        files = [((i - A1) % 8) for i in pawn_sqs if A1 <= i <= H1 + 70]
+        counts = [files.count(f) for f in range(8)]
+        return sum(max(c - 1, 0) for c in counts)
+
+    def count_isolated_pawns(self, pawn_sqs, is_white):
+        """Count isolated pawns (no friendly pawn on adjacent files)"""
+        files = [((i - A1) % 8) for i in pawn_sqs if A1 <= i <= H1 + 70]
+        isolated = 0
+        for f in range(8):
+            if files.count(f) == 0:
+                continue
+            has_left = files.count(f-1) > 0 if f-1 >= 0 else False
+            has_right = files.count(f+1) > 0 if f+1 <= 7 else False
+            if not has_left and not has_right:
+                isolated += files.count(f)
+        return isolated
+
+    def count_passed_pawns(self, pawn_sqs, is_white):
+        """Count passed pawns (no opposing pawn on same or adjacent file ahead)"""
+        count = 0
+        for i in pawn_sqs:
+            file = (i - A1) % 8
+            rank = (i - A1) // 10
+            passed = True
+            for df in (-1, 0, 1):
+                f2 = file + df
+                if not (0 <= f2 <= 7):
+                    continue
+                if is_white:
+                    for r in range(rank - 1, -1, -1):
+                        sq = A1 + f2 + (-10) * r
+                        if 0 <= sq < len(self.board):
+                            if self.board[sq] == "p":
+                                passed = False
+                                break
+                    if not passed:
+                        break
+                else:
+                    for r in range(rank + 1, 8):
+                        sq = A1 + f2 + (-10) * r
+                        if 0 <= sq < len(self.board):
+                            if self.board[sq] == "P":
+                                passed = False
+                                break
+                    if not passed:
+                        break
+            if passed:
+                count += 1
+        return count
 
     def count_doubled_pawns(self, pawn_sqs, is_white):
         """Count doubled pawns (pawns on same file, not counting first pawn in file)."""
@@ -375,8 +427,9 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
         return count
 
     def eval_king_safety(self):
-        """Evaluate king safety for both sides. Exaggerated penalties/bonuses for testing."""
+        """Evaluate king safety for both sides. Exaggerated, always positive for white's benefit after rotation."""
         score = 0
+        # After rotation, always white to move, so always evaluate for "white is us"
         w_king = [i for i, p in enumerate(self.board) if p == "K"]
         b_king = [i for i, p in enumerate(self.board) if p == "k"]
         if w_king:
@@ -402,7 +455,7 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
             sq = king_sq + offset
             if 0 <= sq < len(self.board) and self.board[sq] == ".":
                 penalty += 100
-        # Huge penalty for enemy pieces near king (1-ring and 2-ring)
+        # Exaggerated penalty for enemy pieces near king (1-ring and 2-ring)
         for dr in range(-2, 3):
             for df in range(-2, 3):
                 if dr == 0 and df == 0:
@@ -411,18 +464,18 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
                 if 0 <= sq < len(self.board):
                     piece = self.board[sq]
                     if (piece.islower() if is_white else piece.isupper()) and piece != ".":
-                        penalty += 400 if abs(dr) <= 1 and abs(df) <= 1 else 200
+                        penalty += 1000 if abs(dr) <= 1 and abs(df) <= 1 else 500
         # Bonus/penalty for being castled (crude)
         rank = (king_sq - A1) // 10
         if (is_white and rank == 7) or (not is_white and rank == 0):
-            penalty -= 200
+            penalty -= 500
         return -penalty
 
     def eval_mobility(self):
-        """Evaluate mobility for both sides. Exaggerated bonus for testing."""
+        """Evaluate mobility for both sides. Exaggerated bonus for testing. Always positive for white after rotation."""
         my_mob = self.mobility(is_white=True)
         opp_mob = self.mobility(is_white=False)
-        return 75 * (my_mob - opp_mob)
+        return 500 * (my_mob - opp_mob)
 
     def mobility(self, is_white):
         """Count legal moves for minor/major pieces."""
