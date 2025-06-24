@@ -151,10 +151,7 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
     """
 
     def gen_moves(self):
-        # For each of our pieces, iterate through each possible 'ray' of moves,
-        # as defined in the 'directions' map. The rays are broken e.g. by
-        # captures or immediately in case of pieces such as knights.
-        # Only yield LEGAL moves: those that do NOT leave the king in check.
+        # Generate all pseudo-legal moves and filter out moves that leave the king in check.
         pseudo_moves = []
         for i, p in enumerate(self.board):
             if not p.isupper():
@@ -162,10 +159,9 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
             for d in directions[p]:
                 for j in count(i + d, d):
                     q = self.board[j]
-                    # Stay inside the board, and off friendly pieces
                     if q.isspace() or q.isupper():
                         break
-                    # Pawn move, double move and capture
+                    # Pawn logic
                     if p == "P":
                         if d in (N, N + N) and q != ".": break
                         if d == N + N and (i < A1 + N or self.board[i + N] != "."): break
@@ -175,13 +171,11 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
                             and j not in (self.ep, self.kp, self.kp - 1, self.kp + 1)
                         ):
                             break
-                        # If we move to the last row, we can be anything
                         if A8 <= j <= H8:
                             for prom in "NBRQ":
                                 pseudo_moves.append(Move(i, j, prom))
                             break
                     pseudo_moves.append(Move(i, j, ""))
-                    # Stop crawlers from sliding, and sliding after captures
                     if p in "PNK" or q.islower():
                         break
                     # Castling, by sliding the rook next to the king
@@ -189,15 +183,38 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
                         pseudo_moves.append(Move(j + E, j + W, ""))
                     if i == H1 and self.board[j + W] == "K" and self.wc[1]:
                         pseudo_moves.append(Move(j + W, j + E, ""))
-        # Filter pseudo-legal moves to only legal moves
+        # Filter to only legal moves: after our move, our king must not be attacked
         for move in pseudo_moves:
             pos2 = self.move(move)
-            # After move, it's opponent's turn, so rotate to have the same color at root
-            # Only yield move if our king is NOT attacked after the move
-            # Since move() rotates, pos2's .is_in_check(True) checks the side to move
-            # We want to check if OUR king is in check, i.e., True
+            # After move(), pos2 is rotated so white is always to move. Thus, to check
+            # if our king is in check after move, check pos2.is_in_check(True)
             if not pos2.is_in_check(True):
+                # For castling moves, ensure king doesn't move through/into check
+                if self.is_castling_move(move):
+                    if not self.is_castling_legal(move):
+                        continue
                 yield move
+
+    def is_castling_move(self, move):
+        i, j, prom = move
+        p = self.board[i]
+        return p == "K" and abs(i - j) == 2
+
+    def is_castling_legal(self, move):
+        # Ensure that castling does not move the king through or into check
+        i, j, prom = move
+        if abs(i - j) != 2:
+            return True
+        king_dir = 1 if j > i else -1
+        king_path = [i, i + king_dir, i + king_dir * 2]
+        for sq in king_path:
+            # Put king on each square and check for check
+            board = self.board[:sq] + "K" + self.board[sq + 1 :]
+            board = board[:i] + "." + board[i + 1 :]
+            pos_tmp = Position(board, 0, self.wc, self.bc, self.ep, self.kp)
+            if pos_tmp.is_in_check(True):
+                return False
+        return True
 
     def rotate(self, nullmove=False):
         """Rotates the board, preserving enpassant, unless nullmove"""
@@ -290,33 +307,36 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
         return score
 
     def eval_pawn_structure(self):
-        """Evaluate pawn structure for both sides."""
+        """Evaluate pawn structure for both sides. Stronger penalties/bonuses."""
         score = 0
         white_pawns = [i for i, p in enumerate(self.board) if p == "P"]
         black_pawns = [i for i, p in enumerate(self.board) if p == "p"]
-        # Doubled pawns penalty
-        score -= 15 * self.count_doubled_pawns(white_pawns, is_white=True)
-        score += 15 * self.count_doubled_pawns(black_pawns, is_white=False)
-        # Isolated pawns penalty
-        score -= 20 * self.count_isolated_pawns(white_pawns, is_white=True)
-        score += 20 * self.count_isolated_pawns(black_pawns, is_white=False)
-        # Passed pawn bonus
-        score += 25 * self.count_passed_pawns(white_pawns, is_white=True)
-        score -= 25 * self.count_passed_pawns(black_pawns, is_white=False)
+        # Stronger doubled pawns penalty
+        score -= 40 * self.count_doubled_pawns(white_pawns, is_white=True)
+        score += 40 * self.count_doubled_pawns(black_pawns, is_white=False)
+        # Stronger isolated pawns penalty
+        score -= 50 * self.count_isolated_pawns(white_pawns, is_white=True)
+        score += 50 * self.count_isolated_pawns(black_pawns, is_white=False)
+        # Stronger passed pawn bonus
+        score += 50 * self.count_passed_pawns(white_pawns, is_white=True)
+        score -= 50 * self.count_passed_pawns(black_pawns, is_white=False)
         return score
 
     def count_doubled_pawns(self, pawn_sqs, is_white):
-        """Count doubled pawns (pawns on same file)"""
+        """Count doubled pawns (pawns on same file, not counting first pawn in file)."""
         files = [((i - A1) % 8) for i in pawn_sqs if A1 <= i <= H1 + 70]
-        return sum(max(files.count(f) - 1, 0) for f in set(files))
+        counts = [files.count(f) for f in range(8)]
+        return sum(max(c - 1, 0) for c in counts)
 
     def count_isolated_pawns(self, pawn_sqs, is_white):
         """Count isolated pawns (no friendly pawn on adjacent files)"""
         files = [((i - A1) % 8) for i in pawn_sqs if A1 <= i <= H1 + 70]
         isolated = 0
-        for f in set(files):
-            has_left = (f - 1) in files
-            has_right = (f + 1) in files
+        for f in range(8):
+            if files.count(f) == 0:
+                continue
+            has_left = files.count(f-1) > 0 if f-1 >= 0 else False
+            has_right = files.count(f+1) > 0 if f+1 <= 7 else False
             if not has_left and not has_right:
                 isolated += files.count(f)
         return isolated
@@ -355,7 +375,7 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
         return count
 
     def eval_king_safety(self):
-        """Evaluate king safety for both sides."""
+        """Evaluate king safety for both sides. Stronger penalties/bonuses."""
         score = 0
         w_king = [i for i, p in enumerate(self.board) if p == "K"]
         b_king = [i for i, p in enumerate(self.board) if p == "k"]
@@ -366,7 +386,7 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
         return score
 
     def king_safety_at(self, king_sq, is_white):
-        """Penalize king exposure, reward pawn shield."""
+        """Penalize king exposure, reward pawn shield. Stronger effect. Penalize enemy pieces near king."""
         penalty = 0
         # Pawn shield squares
         pawn_dir = -10 if is_white else 10
@@ -374,18 +394,28 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
             front_sq = king_sq + pawn_dir + offset
             if 0 <= front_sq < len(self.board):
                 if self.board[front_sq] == ("P" if is_white else "p"):
-                    penalty -= 15
+                    penalty -= 40  # Stronger bonus for pawn shield
                 else:
-                    penalty += 15
+                    penalty += 40  # Stronger penalty for missing shield
         # Check for open files near king
         for offset in (-2, -1, 1, 2):
             sq = king_sq + offset
             if 0 <= sq < len(self.board) and self.board[sq] == ".":
-                penalty += 4
+                penalty += 10
+        # Stronger penalty for enemy pieces near king (1-ring and 2-ring)
+        for dr in range(-2, 3):
+            for df in range(-2, 3):
+                if dr == 0 and df == 0:
+                    continue
+                sq = king_sq + dr * 10 + df
+                if 0 <= sq < len(self.board):
+                    piece = self.board[sq]
+                    if (piece.islower() if is_white else piece.isupper()) and piece != ".":
+                        penalty += 32 if abs(dr) <= 1 and abs(df) <= 1 else 16
         # Bonus/penalty for being castled (crude)
         rank = (king_sq - A1) // 10
         if (is_white and rank == 7) or (not is_white and rank == 0):
-            penalty -= 5
+            penalty -= 15
         return -penalty
 
     def eval_mobility(self):
