@@ -154,6 +154,8 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
         # For each of our pieces, iterate through each possible 'ray' of moves,
         # as defined in the 'directions' map. The rays are broken e.g. by
         # captures or immediately in case of pieces such as knights.
+        # Only yield LEGAL moves: those that do NOT leave the king in check.
+        pseudo_moves = []
         for i, p in enumerate(self.board):
             if not p.isupper():
                 continue
@@ -176,18 +178,26 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
                         # If we move to the last row, we can be anything
                         if A8 <= j <= H8:
                             for prom in "NBRQ":
-                                yield Move(i, j, prom)
+                                pseudo_moves.append(Move(i, j, prom))
                             break
-                    # Move it
-                    yield Move(i, j, "")
+                    pseudo_moves.append(Move(i, j, ""))
                     # Stop crawlers from sliding, and sliding after captures
                     if p in "PNK" or q.islower():
                         break
                     # Castling, by sliding the rook next to the king
                     if i == A1 and self.board[j + E] == "K" and self.wc[0]:
-                        yield Move(j + E, j + W, "")
+                        pseudo_moves.append(Move(j + E, j + W, ""))
                     if i == H1 and self.board[j + W] == "K" and self.wc[1]:
-                        yield Move(j + W, j + E, "")
+                        pseudo_moves.append(Move(j + W, j + E, ""))
+        # Filter pseudo-legal moves to only legal moves
+        for move in pseudo_moves:
+            pos2 = self.move(move)
+            # After move, it's opponent's turn, so rotate to have the same color at root
+            # Only yield move if our king is NOT attacked after the move
+            # Since move() rotates, pos2's .is_in_check(True) checks the side to move
+            # We want to check if OUR king is in check, i.e., True
+            if not pos2.is_in_check(True):
+                yield move
 
     def rotate(self, nullmove=False):
         """Rotates the board, preserving enpassant, unless nullmove"""
