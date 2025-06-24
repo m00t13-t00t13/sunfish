@@ -307,19 +307,19 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
         return score
 
     def eval_pawn_structure(self):
-        """Evaluate pawn structure for both sides. Stronger penalties/bonuses."""
+        """Evaluate pawn structure for both sides. Exaggerated penalties/bonuses for testing."""
         score = 0
         white_pawns = [i for i, p in enumerate(self.board) if p == "P"]
         black_pawns = [i for i, p in enumerate(self.board) if p == "p"]
-        # Stronger doubled pawns penalty
-        score -= 40 * self.count_doubled_pawns(white_pawns, is_white=True)
-        score += 40 * self.count_doubled_pawns(black_pawns, is_white=False)
-        # Stronger isolated pawns penalty
-        score -= 50 * self.count_isolated_pawns(white_pawns, is_white=True)
-        score += 50 * self.count_isolated_pawns(black_pawns, is_white=False)
-        # Stronger passed pawn bonus
-        score += 50 * self.count_passed_pawns(white_pawns, is_white=True)
-        score -= 50 * self.count_passed_pawns(black_pawns, is_white=False)
+        # Exaggerated doubled pawns penalty
+        score -= 400 * self.count_doubled_pawns(white_pawns, is_white=True)
+        score += 400 * self.count_doubled_pawns(black_pawns, is_white=False)
+        # Exaggerated isolated pawns penalty
+        score -= 600 * self.count_isolated_pawns(white_pawns, is_white=True)
+        score += 600 * self.count_isolated_pawns(black_pawns, is_white=False)
+        # Exaggerated passed pawn bonus
+        score += 900 * self.count_passed_pawns(white_pawns, is_white=True)
+        score -= 900 * self.count_passed_pawns(black_pawns, is_white=False)
         return score
 
     def count_doubled_pawns(self, pawn_sqs, is_white):
@@ -375,7 +375,7 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
         return count
 
     def eval_king_safety(self):
-        """Evaluate king safety for both sides. Stronger penalties/bonuses."""
+        """Evaluate king safety for both sides. Exaggerated penalties/bonuses for testing."""
         score = 0
         w_king = [i for i, p in enumerate(self.board) if p == "K"]
         b_king = [i for i, p in enumerate(self.board) if p == "k"]
@@ -386,7 +386,7 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
         return score
 
     def king_safety_at(self, king_sq, is_white):
-        """Penalize king exposure, reward pawn shield. Stronger effect. Penalize enemy pieces near king."""
+        """Penalize king exposure, reward pawn shield. EXAGGERATED for tests."""
         penalty = 0
         # Pawn shield squares
         pawn_dir = -10 if is_white else 10
@@ -394,15 +394,15 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
             front_sq = king_sq + pawn_dir + offset
             if 0 <= front_sq < len(self.board):
                 if self.board[front_sq] == ("P" if is_white else "p"):
-                    penalty -= 40  # Stronger bonus for pawn shield
+                    penalty -= 250  # Exaggerated bonus for pawn shield
                 else:
-                    penalty += 40  # Stronger penalty for missing shield
+                    penalty += 250  # Exaggerated penalty for missing shield
         # Check for open files near king
         for offset in (-2, -1, 1, 2):
             sq = king_sq + offset
             if 0 <= sq < len(self.board) and self.board[sq] == ".":
-                penalty += 10
-        # Stronger penalty for enemy pieces near king (1-ring and 2-ring)
+                penalty += 100
+        # Huge penalty for enemy pieces near king (1-ring and 2-ring)
         for dr in range(-2, 3):
             for df in range(-2, 3):
                 if dr == 0 and df == 0:
@@ -411,18 +411,18 @@ class Position(namedtuple("Position", "board score wc bc ep kp")):
                 if 0 <= sq < len(self.board):
                     piece = self.board[sq]
                     if (piece.islower() if is_white else piece.isupper()) and piece != ".":
-                        penalty += 32 if abs(dr) <= 1 and abs(df) <= 1 else 16
+                        penalty += 400 if abs(dr) <= 1 and abs(df) <= 1 else 200
         # Bonus/penalty for being castled (crude)
         rank = (king_sq - A1) // 10
         if (is_white and rank == 7) or (not is_white and rank == 0):
-            penalty -= 15
+            penalty -= 200
         return -penalty
 
     def eval_mobility(self):
-        """Evaluate mobility for both sides."""
+        """Evaluate mobility for both sides. Exaggerated bonus for testing."""
         my_mob = self.mobility(is_white=True)
         opp_mob = self.mobility(is_white=False)
-        return 2 * (my_mob - opp_mob)
+        return 75 * (my_mob - opp_mob)
 
     def mobility(self, is_white):
         """Count legal moves for minor/major pieces."""
